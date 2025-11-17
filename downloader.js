@@ -106,7 +106,7 @@ async function startDownload(url, socket) {
             // Clean up
             activeDownloads.delete(downloadId);
             if (activeDownloads.size === 0) {
-                caffeine.allowSleep();
+                // caffeine.allowSleep();
                 console.log('Caffeine: Last download finished. Allowing system sleep.');
             }
         });
@@ -130,7 +130,7 @@ function handleDownloadError(error, downloadId, socket, context) {
     // Clean up
     activeDownloads.delete(downloadId);
     if (activeDownloads.size === 0) {
-        caffeine.allowSleep();
+        // caffeine.allowSleep();
         console.log('Caffeine: Error in last download. Allowing system sleep.');
     }
 }

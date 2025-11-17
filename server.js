@@ -48,7 +48,7 @@ io.on('connection', (socket) => {
             socket.emit('download-error', { id: url, error: error.message });
             
             if (activeDownloads.size === 0) {
-                caffeine.allowSleep();
+                // caffeine.allowSleep();
                 console.log('Caffeine: Allowing system sleep.');
             }
         }
