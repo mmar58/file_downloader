@@ -2,6 +2,7 @@
 
 A powerful, IDM-like download manager built with Node.js, Express, and [Socket.io](http://Socket.io). It features multi-part (segmented) downloading for high speeds, persistent resumable downloads, and a real-time web UI to manage your download queue.
 
+ ![ScreenShot](https://github.com/mmar58/file_downloader/blob/master/images/image.png)
 
 ## 🚀 Key Features
 
