@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
+    <meta charset="UTF-R8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Node.js Downloader</title>
     <style>
@@ -9,8 +9,19 @@
         h1 { color: #333; }
         #downloadForm { margin-bottom: 20px; }
         #urlInput { width: 400px; padding: 8px; font-size: 1em; }
-        button { padding: 9px 15px; font-size: 1em; cursor: pointer; }
-        #totalSpeed { font-size: 1.2em; font-weight: bold; color: #0056b3; margin-bottom: 20px; }
+        button { padding: 9px 15px; font-size: 1em; cursor: pointer; border: none; border-radius: 3px; }
+        #downloadForm button { background: #007bff; color: white; }
+        
+        #totalSpeed { font-size: 1.2em; font-weight: bold; color: #0056b3; margin-bottom: 10px; }
+        
+        #globalControls { margin-bottom: 20px; }
+        #globalControls button {
+            margin-right: 10px;
+            color: white;
+        }
+        #globalControls .resume-all-btn { background: #28a745; }
+        #globalControls .pause-all-btn { background: #ffc107; }
+
         #downloadsList { list-style: none; padding: 0; }
         .download-item { background: #fff; border: 1px solid #ddd; padding: 15px; margin-bottom: 10px; border-radius: 5px; }
         .progress-bar-container { background: #eee; border-radius: 5px; overflow: hidden; height: 20px; margin-top: 10px; }
@@ -19,6 +30,7 @@
         .status-complete { color: green; }
         .status-error { color: red; }
         .status-paused { color: #6c757d; }
+        .status-queued { color: #17a2b8; }
         
         .download-controls { margin-top: 10px; }
         .download-controls .pause-btn { background: #ffc107; }
@@ -37,6 +49,11 @@
     </form>
 
     <div id="totalSpeed">Total Speed: 0 B/s</div>
+
+    <div id="globalControls">
+        <button id="resumeAllBtn" class="resume-all-btn">Resume All</button>
+        <button id="pauseAllBtn" class="pause-all-btn">Pause All</button>
+    </div>
     <ul id="downloadsList"></ul>
 
     <script src="/socket.io/socket.io.js"></script>
@@ -46,6 +63,8 @@
         const urlInput = document.getElementById('urlInput');
         const downloadsList = document.getElementById('downloadsList');
         const totalSpeedElement = document.getElementById('totalSpeed');
+        const resumeAllBtn = document.getElementById('resumeAllBtn');
+        const pauseAllBtn = document.getElementById('pauseAllBtn');
 
         // --- Helper Functions ---
         function formatBytes(bytes, decimals = 2) {
@@ -65,6 +84,28 @@
             return `${parseFloat((bytesPerSecond / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
         }
 
+        // --- NEW: Format ETA (Estimated Time Remaining) ---
+        function formatETA(seconds) {
+            if (seconds === null || !isFinite(seconds) || seconds < 0) {
+                return 'N/A';
+            }
+            if (seconds === 0) {
+                return 'Done';
+            }
+
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+
+            let etaString = '';
+            if (h > 0) etaString += `${h}h `;
+            if (m > 0) etaString += `${m}m `;
+            if (s >= 0) etaString += `${s}s`;
+            
+            return etaString.trim() + ' left';
+        }
+        // ----------------------------------------------------
+
         /**
          * Creates or updates a download item in the DOM
          */
@@ -74,21 +115,27 @@
                 item = document.createElement('li');
                 item.id = `download-${download.id}`;
                 item.classList.add('download-item');
-                downloadsList.prepend(item);
+                downloadsList.prepend(item); 
             }
 
-            const progress = (download.downloadedSize / download.totalSize) * 100;
+            const progress = (download.downloadedSize / download.totalSize) * 100 || 0;
             let statusHtml;
             let controlsHtml = '';
 
             switch (download.status) {
                 case 'downloading':
-                    statusHtml = `Downloading: ${progress.toFixed(2)}% (${formatBytes(download.downloadedSize)} / ${formatBytes(download.totalSize)}) - ${formatSpeed(download.currentSpeed)}`;
+                    // --- UPDATED: Add ETA ---
+                    const etaString = formatETA(download.eta);
+                    statusHtml = `Downloading: ${progress.toFixed(2)}% (${formatBytes(download.downloadedSize)} / ${formatBytes(download.totalSize)}) - ${formatSpeed(download.currentSpeed)} - <strong>${etaString}</strong>`;
                     controlsHtml = `<button class="pause-btn" data-id="${download.id}">Pause</button>`;
                     break;
                 case 'paused':
                     statusHtml = `<strong class="status-paused">Paused:</strong> ${progress.toFixed(2)}% (${formatBytes(download.downloadedSize)})`;
                     controlsHtml = `<button class="resume-btn" data-id="${download.id}">Resume</button>`;
+                    break;
+                case 'queued':
+                    statusHtml = `<strong class="status-queued">Queued...</strong> (${progress.toFixed(2)}%)`;
+                    controlsHtml = `<button class="pause-btn" data-id="${download.id}">Pause</button>`;
                     break;
                 case 'complete':
                     statusHtml = `<strong class="status-complete">Download Complete!</strong> (${formatBytes(download.totalSize)})`;
@@ -96,6 +143,9 @@
                 case 'error':
                     statusHtml = `<strong class="status-error">Error:</strong> ${download.error}`;
                     controlsHtml = `<button class="resume-btn" data-id="${download.id}">Retry</button>`;
+                    break;
+                case 'assembling':
+                    statusHtml = `<strong>Assembling file...</strong>`;
                     break;
                 default:
                     statusHtml = `Starting...`;
@@ -110,12 +160,12 @@
                 <div class="download-controls">${controlsHtml}</div>
             `;
             
-            // Re-style progress bar based on state
             const bar = item.querySelector('.progress-bar');
             if (download.status === 'complete') bar.style.backgroundColor = '#28a745';
-            if (download.status === 'error') bar.style.backgroundColor = '#dc3545';
-            if (download.status === 'paused') bar.style.backgroundColor = '#6c757d';
-            if (download.status === 'downloading') bar.style.backgroundColor = '#007bff';
+            else if (download.status === 'error') bar.style.backgroundColor = '#dc3545';
+            else if (download.status === 'paused') bar.style.backgroundColor = '#6c757d';
+            else if (download.status === 'queued') bar.style.backgroundColor = '#17a2b8';
+            else if (download.status === 'downloading') bar.style.backgroundColor = '#007bff';
         }
 
         // --- Form & Button Event Listeners ---
@@ -131,7 +181,6 @@
         downloadsList.addEventListener('click', (e) => {
             const id = e.target.dataset.id;
             if (!id) return;
-
             if (e.target.classList.contains('pause-btn')) {
                 socket.emit('pause-download', { id });
             }
@@ -140,61 +189,40 @@
             }
         });
 
+        resumeAllBtn.addEventListener('click', () => {
+            socket.emit('resume-all-downloads');
+        });
+
+        pauseAllBtn.addEventListener('click', () => {
+            socket.emit('pause-all-downloads');
+        });
+
         // --- Socket.io Event Handlers ---
 
-        // On page load, render all downloads from the server's DB
         socket.on('download-list', (downloads) => {
-            downloadsList.innerHTML = '';
+            downloadsList.innerHTML = ''; 
+            downloads.sort((a, b) => b.id - a.id); 
             downloads.forEach(renderDownloadItem);
         });
         
-        // A new download has been created
         socket.on('download-started', (download) => {
             renderDownloadItem(download);
         });
 
-        // A download was paused
-        socket.on('download-paused', ({ id }) => {
-            const entry = downloadsList.querySelector(`#download-${id}`);
-            if (entry) {
-                const status = entry.querySelector('.status-text');
-                status.innerHTML = `<strong class="status-paused">Paused</strong>`;
-                entry.querySelector('.progress-bar').style.backgroundColor = '#6c757d';
-                // Find a better way by just re-rendering
-                const download = { id, status: 'paused', downloadedSize: 0, totalSize: 1 }; // Hacky, needs state
-                // Let's just ask the server for the full item... or wait for full implementation
-                // For now, let's just update the button
-                entry.querySelector('.download-controls').innerHTML = 
-                    `<button class="resume-btn" data-id="${id}">Resume</button>`;
-                
-                // A full-state-sync approach is better
-                // For now, we'll just update the status text
-            }
-            // A better way: just get the full download object and re-render
-            const item = downloadsList.querySelector(`#download-${id}`);
-            const progress = item.querySelector('.progress-bar').style.width;
-            renderDownloadItem({
-                id: id,
-                filename: item.querySelector('strong').textContent,
-                status: 'paused',
-                downloadedSize: 0, // We lose this info temporarily,
-                totalSize: 1,      // But it will be fixed on 'download-list' refresh
-                progress: parseFloat(progress),
-                error: null
-            });
-        });
-
         // A download is making progress
-        socket.on('download-progress', ({ id, progress, downloaded, totalSize, speed }) => {
+        socket.on('download-progress', ({ id, progress, downloaded, totalSize, speed, eta }) => { // <-- ETA is here
             const item = document.getElementById(`download-${id}`);
             if (item) {
                 const bar = item.querySelector('.progress-bar');
                 const status = item.querySelector('.status-text');
                 bar.style.width = `${progress.toFixed(2)}%`;
                 bar.style.backgroundColor = '#007bff';
-                status.innerHTML = `Downloading: ${progress.toFixed(2)}% (${formatBytes(downloaded)} / ${formatBytes(totalSize)}) - ${formatSpeed(speed)}`;
                 
-                // Ensure pause button is visible
+                // --- UPDATED: Add ETA ---
+                const etaString = formatETA(eta);
+                status.innerHTML = `Downloading: ${progress.toFixed(2)}% (${formatBytes(downloaded)} / ${formatBytes(totalSize)}) - ${formatSpeed(speed)} - <strong>${etaString}</strong>`;
+                // ------------------------
+                
                 const controls = item.querySelector('.download-controls');
                 if (!controls.querySelector('.pause-btn')) {
                     controls.innerHTML = `<button class="pause-btn" data-id="${id}">Pause</button>`;
@@ -211,13 +239,13 @@
                 bar.style.width = '100%';
                 bar.style.backgroundColor = '#28a745';
                 status.innerHTML = `<strong class="status-complete">Download Complete!</strong>`;
-                item.querySelector('.download-controls').innerHTML = ''; // Clear buttons
+                item.querySelector('.download-controls').innerHTML = ''; 
             }
         });
 
         // An error occurred
         socket.on('download-error', ({ id, error }) => {
-            const item = document.getElementById(`download-${id}`);
+            let item = document.getElementById(`download-${id}`);
             if (item) {
                 const bar = item.querySelector('.progress-bar');
                 const status = item.querySelector('.status-text');
@@ -225,6 +253,8 @@
                 bar.style.backgroundColor = '#dc3545';
                 item.querySelector('.download-controls').innerHTML = 
                     `<button class="resume-btn" data-id="${id}">Retry</button>`;
+            } else {
+                alert(`Error starting download for ${id}: ${error}`);
             }
         });
 
