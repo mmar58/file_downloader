@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Node.js Downloader</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 2em; background: #f4f7f6; }
+        h1 { color: #333; }
+        #downloadForm { margin-bottom: 20px; }
+        #urlInput { width: 400px; padding: 8px; font-size: 1em; }
+        button { padding: 9px 15px; font-size: 1em; cursor: pointer; }
+        #downloadsList { list-style: none; padding: 0; }
+        .download-item { background: #fff; border: 1px solid #ddd; padding: 15px; margin-bottom: 10px; border-radius: 5px; }
+        .progress-bar-container { background: #eee; border-radius: 5px; overflow: hidden; height: 20px; margin-top: 10px; }
+        .progress-bar { background: #007bff; height: 100%; width: 0%; transition: width 0.2s linear; }
+        .status-text { margin-top: 5px; font-size: 0.9em; color: #555; }
+        .status-complete { color: green; font-weight: bold; }
+        .status-error { color: red; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Node.js IDM-like Downloader</h1>
+    
+    <form id="downloadForm">
+        <input type="text" id="urlInput" placeholder="Enter file URL" required>
+        <button type="submit">Download</button>
+    </form>
+
+    <ul id="downloadsList"></ul>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const form = document.getElementById('downloadForm');
+        const urlInput = document.getElementById('urlInput');
+        const downloadsList = document.getElementById('downloadsList');
+
+        // Handle form submission
+        form.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const url = urlInput.value.trim();
+            if (url) {
+                socket.emit('start-download', { url });
+                urlInput.value = '';
+            }
+        });
+
+        // Helper: Format bytes
+        function formatBytes(bytes, decimals = 2) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+
+        // --- Socket.io Event Listeners ---
+
+        // Download has been acknowledged and is starting
+        socket.on('download-started', ({ id, filename, totalSize }) => {
+            const item = document.createElement('li');
+            item.id = `download-${id}`;
+            item.classList.add('download-item');
+            item.innerHTML = `
+                <strong>${filename}</strong> (${formatBytes(totalSize)})
+                <div class="progress-bar-container">
+                    <div class="progress-bar" style="width: 0%;"></div>
+                </div>
+                <div class="status-text">Starting...</div>
+            `;
+            downloadsList.prepend(item);
+        });
+
+        // Download is making progress
+        socket.on('download-progress', ({ id, progress, downloaded, totalSize }) => {
+            const item = document.getElementById(`download-${id}`);
+            if (item) {
+                const bar = item.querySelector('.progress-bar');
+                const status = item.querySelector('.status-text');
+                bar.style.width = `${progress.toFixed(2)}%`;
+                status.textContent = `Downloading: ${progress.toFixed(2)}% (${formatBytes(downloaded)} / ${formatBytes(totalSize)})`;
+            }
+        });
+
+        // Download is complete
+        socket.on('download-complete', ({ id, filePath }) => {
+            const item = document.getElementById(`download-${id}`);
+            if (item) {
+                const bar = item.querySelector('.progress-bar');
+                const status = item.querySelector('.status-text');
+                bar.style.width = '100%';
+                bar.style.backgroundColor = '#28a745'; // Green
+                status.textContent = `Download Complete! Saved to server at: ${filePath}`;
+                status.classList.add('status-complete');
+            }
+        });
+
+        // An error occurred
+        socket.on('download-error', ({ id, error }) => {
+            let item = document.getElementById(`download-${id}`);
+            // If download hasn't started, create a temp item
+            if (!item) {
+                item = document.createElement('li');
+                item.classList.add('download-item');
+                item.innerHTML = `<strong>Error for ${id}</strong>`;
+                downloadsList.prepend(item);
+            }
+
+            const status = item.querySelector('.status-text') || document.createElement('div');
+            status.textContent = `Error: ${error}`;
+            status.classList.add('status-error');
+            
+            if (!item.querySelector('.status-text')) {
+                item.appendChild(status);
+            }
+            
+            const bar = item.querySelector('.progress-bar');
+            if (bar) bar.style.backgroundColor = '#dc3545'; // Red
+        });
+    </script>
+</body>
+</html>
