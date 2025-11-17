@@ -3,7 +3,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
-const { startDownload, activeDownloads } = require('./downloader');
+const { startDownload, activeDownloads } = require('./downloader'); // Import activeDownloads
 const caffeine = require('caffeine');
 
 const app = express();
@@ -13,6 +13,21 @@ const io = new Server(server);
 // Serve the public directory
 app.use(express.static(path.join(__dirname, 'public')));
 
+// --- NEW: Total Speed Calculation ---
+// Set an interval to calculate and broadcast total speed every 1 second
+setInterval(() => {
+    let totalSpeed = 0;
+    
+    // Iterate over all active downloads and sum their speeds
+    for (const download of activeDownloads.values()) {
+        totalSpeed += download.currentSpeed || 0;
+    }
+
+    // Broadcast the total speed to all connected clients
+    io.emit('total-speed-update', { totalSpeed });
+}, 1000);
+// -----------------------------------
+
 // Handle Socket.io connections
 io.on('connection', (socket) => {
     console.log(`Socket connected: ${socket.id}`);
@@ -21,21 +36,17 @@ io.on('connection', (socket) => {
     socket.on('start-download', async ({ url }) => {
         console.log(`Received download request for: ${url}`);
         
-        // Prevent sleep if this is the first download
         if (activeDownloads.size === 0) {
             // caffeine.preventSleep();
             console.log('Caffeine: Preventing system sleep.');
         }
 
         try {
-            // Start the download and pass the socket to send progress updates
             await startDownload(url, socket);
-
         } catch (error) {
             console.error(`Error initiating download for ${url}:`, error.message);
             socket.emit('download-error', { id: url, error: error.message });
             
-            // Allow sleep if no downloads are left
             if (activeDownloads.size === 0) {
                 caffeine.allowSleep();
                 console.log('Caffeine: Allowing system sleep.');
@@ -45,8 +56,6 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         console.log(`Socket disconnected: ${socket.id}`);
-        // Note: Ongoing downloads will continue, but this socket won't get updates.
-        // A more robust solution might map socket.id to downloads to cancel them.
     });
 });
 

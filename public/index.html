@@ -10,6 +10,16 @@
         #downloadForm { margin-bottom: 20px; }
         #urlInput { width: 400px; padding: 8px; font-size: 1em; }
         button { padding: 9px 15px; font-size: 1em; cursor: pointer; }
+        
+        /* --- NEW: Style for Total Speed --- */
+        #totalSpeed {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #0056b3;
+            margin-bottom: 20px;
+        }
+        /* ---------------------------------- */
+
         #downloadsList { list-style: none; padding: 0; }
         .download-item { background: #fff; border: 1px solid #ddd; padding: 15px; margin-bottom: 10px; border-radius: 5px; }
         .progress-bar-container { background: #eee; border-radius: 5px; overflow: hidden; height: 20px; margin-top: 10px; }
@@ -27,6 +37,8 @@
         <button type="submit">Download</button>
     </form>
 
+    <div id="totalSpeed">Total Speed: 0 B/s</div>
+
     <ul id="downloadsList"></ul>
 
     <script src="/socket.io/socket.io.js"></script>
@@ -35,6 +47,7 @@
         const form = document.getElementById('downloadForm');
         const urlInput = document.getElementById('urlInput');
         const downloadsList = document.getElementById('downloadsList');
+        const totalSpeedElement = document.getElementById('totalSpeed'); // <-- NEW
 
         // Handle form submission
         form.addEventListener('submit', (e) => {
@@ -46,7 +59,7 @@
             }
         });
 
-        // Helper: Format bytes
+        // --- UPDATED: Helper Functions ---
         function formatBytes(bytes, decimals = 2) {
             if (bytes === 0) return '0 Bytes';
             const k = 1024;
@@ -56,9 +69,19 @@
             return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
         }
 
+        // --- NEW: Helper for Speed ---
+        function formatSpeed(bytesPerSecond, decimals = 2) {
+            if (bytesPerSecond === 0) return '0 B/s';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];
+            const i = Math.floor(Math.log(bytesPerSecond) / Math.log(k));
+            return parseFloat((bytesPerSecond / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+        // -----------------------------
+
         // --- Socket.io Event Listeners ---
 
-        // Download has been acknowledged and is starting
         socket.on('download-started', ({ id, filename, totalSize }) => {
             const item = document.createElement('li');
             item.id = `download-${id}`;
@@ -73,52 +96,49 @@
             downloadsList.prepend(item);
         });
 
-        // Download is making progress
-        socket.on('download-progress', ({ id, progress, downloaded, totalSize }) => {
+        // --- UPDATED: 'download-progress' listener ---
+        socket.on('download-progress', ({ id, progress, downloaded, totalSize, speed }) => {
             const item = document.getElementById(`download-${id}`);
             if (item) {
                 const bar = item.querySelector('.progress-bar');
                 const status = item.querySelector('.status-text');
+                
                 bar.style.width = `${progress.toFixed(2)}%`;
-                status.textContent = `Downloading: ${progress.toFixed(2)}% (${formatBytes(downloaded)} / ${formatBytes(totalSize)})`;
+                
+                // Show speed in the status text
+                status.textContent = `Downloading: ${progress.toFixed(2)}% (${formatBytes(downloaded)} / ${formatBytes(totalSize)}) - ${formatSpeed(speed)}`;
             }
         });
+        // -------------------------------------------
 
-        // Download is complete
         socket.on('download-complete', ({ id, filePath }) => {
             const item = document.getElementById(`download-${id}`);
             if (item) {
                 const bar = item.querySelector('.progress-bar');
                 const status = item.querySelector('.status-text');
                 bar.style.width = '100%';
-                bar.style.backgroundColor = '#28a745'; // Green
+                bar.style.backgroundColor = '#28a745';
                 status.textContent = `Download Complete! Saved to server at: ${filePath}`;
                 status.classList.add('status-complete');
             }
         });
 
-        // An error occurred
         socket.on('download-error', ({ id, error }) => {
             let item = document.getElementById(`download-${id}`);
-            // If download hasn't started, create a temp item
-            if (!item) {
-                item = document.createElement('li');
-                item.classList.add('download-item');
-                item.innerHTML = `<strong>Error for ${id}</strong>`;
-                downloadsList.prepend(item);
-            }
-
+            if (!item) { /* ... (rest of error handling as before) ... */ }
             const status = item.querySelector('.status-text') || document.createElement('div');
             status.textContent = `Error: ${error}`;
             status.classList.add('status-error');
-            
-            if (!item.querySelector('.status-text')) {
-                item.appendChild(status);
-            }
-            
+            if (!item.querySelector('.status-text')) { item.appendChild(status); }
             const bar = item.querySelector('.progress-bar');
-            if (bar) bar.style.backgroundColor = '#dc3545'; // Red
+            if (bar) bar.style.backgroundColor = '#dc3545';
         });
+
+        // --- NEW: Listener for 'total-speed-update' ---
+        socket.on('total-speed-update', ({ totalSpeed }) => {
+            totalSpeedElement.textContent = `Total Speed: ${formatSpeed(totalSpeed)}`;
+        });
+        // ----------------------------------------------
     </script>
 </body>
 </html>

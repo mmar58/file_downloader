@@ -5,35 +5,35 @@ const path = require('path');
 const { URL } = require('url');
 const caffeine = require('caffeine');
 
-// Create a 'downloads' directory if it doesn't exist
 const downloadsDir = path.join(__dirname, 'downloads');
 if (!fs.existsSync(downloadsDir)) {
     fs.mkdirSync(downloadsDir);
 }
 
-// Use a Map to track all active downloads
 const activeDownloads = new Map();
 
 async function startDownload(url, socket) {
-    const downloadId = Date.now().toString(); // Simple unique ID
+    const downloadId = Date.now().toString();
     let downloadedSize = 0;
+    
+    // --- NEW: Variables for speed calculation ---
+    let lastDownloadedSize = 0;
+    let lastTimestamp = Date.now();
+    // ------------------------------------------
 
     console.log(`[${downloadId}] Starting download...`);
 
     try {
-        // 1. Get file info (size) with a HEAD request
         const headResponse = await axios.head(url);
         const totalSize = parseInt(headResponse.headers['content-length'], 10);
         if (isNaN(totalSize)) {
             throw new Error('Could not determine file size.');
         }
 
-        // Determine filename
         const pathname = new URL(url).pathname;
         const filename = path.basename(pathname) || `download-${downloadId}`;
         const filePath = path.join(downloadsDir, filename);
 
-        // 2. Get the file stream
         const response = await axios({
             method: 'get',
             url: url,
@@ -42,32 +42,65 @@ async function startDownload(url, socket) {
 
         const fileStream = fs.createWriteStream(filePath);
         
-        // Add to active downloads map
-        activeDownloads.set(downloadId, { url, filePath, totalSize });
+        // --- UPDATED: Add currentSpeed to the map ---
+        activeDownloads.set(downloadId, {
+            url,
+            filePath,
+            totalSize,
+            currentSpeed: 0 // Initialize speed at 0
+        });
+        // ---------------------------------------------
         
-        // Notify client that download is starting
         socket.emit('download-started', { id: downloadId, filename, totalSize });
 
-        // 3. Listen for data chunks to track progress
+        // --- UPDATED: 'data' listener with speed calculation and throttling ---
         response.data.on('data', (chunk) => {
             downloadedSize += chunk.length;
-            const progress = (downloadedSize / totalSize) * 100;
             
-            // Emit progress update to the client
-            socket.emit('download-progress', {
-                id: downloadId,
-                progress: progress,
-                downloaded: downloadedSize,
-                totalSize: totalSize,
-            });
-        });
+            const now = Date.now();
+            const deltaTime = (now - lastTimestamp) / 1000; // Time in seconds
 
-        // 4. Pipe the stream to the file
+            // Only send update every ~500ms to avoid flooding the socket
+            if (deltaTime > 0.5) {
+                const deltaSize = downloadedSize - lastDownloadedSize;
+                const currentSpeed = deltaSize / deltaTime; // Bytes per second
+
+                // Update the map for total speed calculation
+                if (activeDownloads.has(downloadId)) {
+                    activeDownloads.get(downloadId).currentSpeed = currentSpeed;
+                }
+
+                // Emit progress and speed
+                socket.emit('download-progress', {
+                    id: downloadId,
+                    progress: (downloadedSize / totalSize) * 100,
+                    downloaded: downloadedSize,
+                    totalSize: totalSize,
+                    speed: currentSpeed // <-- NEW: Send speed
+                });
+
+                // Reset for next calculation
+                lastTimestamp = now;
+                lastDownloadedSize = downloadedSize;
+            }
+        });
+        // -----------------------------------------------------------------
+
         response.data.pipe(fileStream);
 
-        // 5. Handle download completion
         fileStream.on('finish', () => {
             console.log(`[${downloadId}] Download finished.`);
+
+            // --- NEW: Send a final 100% update ---
+            socket.emit('download-progress', {
+                id: downloadId,
+                progress: 100,
+                downloaded: totalSize,
+                totalSize: totalSize,
+                speed: 0
+            });
+            // --------------------------------------
+
             socket.emit('download-complete', { id: downloadId, filePath });
             
             // Clean up
@@ -78,7 +111,6 @@ async function startDownload(url, socket) {
             }
         });
 
-        // 6. Handle errors
         fileStream.on('error', (err) => {
             handleDownloadError(err, downloadId, socket, 'File stream error');
         });
